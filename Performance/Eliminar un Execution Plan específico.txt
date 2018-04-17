@@ -1,0 +1,29 @@
+SELECT ROW_NUMBER() OVER(ORDER BY count(*) DESC) as Row_Number,st.text,r.plan_handle,count(*) as cantidad
+INTO #sesiones
+	  FROM sys.dm_exec_sessions as s
+	  JOIN sys.dm_exec_requests as r
+			ON r.session_id = s.session_id
+	  JOIN sys.dm_exec_connections c
+			ON c.session_id = s.session_id
+	 CROSS APPLY sys.dm_exec_sql_text(r.sql_handle) as st
+	WHERE s.session_id > 50 AND 
+				s.status NOT IN ('sleeping','background') AND
+				s.session_id <> @@spid --AND
+				--CASE s.last_request_end_time 
+				--	WHEN '1900-01-01 00:00:00.000' THEN DATEDIFF(mi,login_time,getdate())			  
+				--	ELSE DATEDIFF(SECOND,s.last_request_end_time,getdate())
+				--END > 1*60 AND
+				--s.host_name IN ('WEBSERVER2-D','WEBSERVER2-E','WEBSERVER1-D','WEBSERVER1-E','resizer-spot')
+GROUP BY st.text,r.plan_handle,r.statement_start_offset
+
+SELECT * from #sesiones
+
+declare  @plan_handle as varbinary(64)
+
+select @plan_handle = plan_handle 
+from #sesiones
+where Row_Number = 1
+
+--DBCC FREEPROCCACHE(@plan_handle)
+
+DROP TABLE #sesiones

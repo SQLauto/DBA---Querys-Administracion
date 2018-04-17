@@ -1,0 +1,30 @@
+SET NOCOUNT ON
+DECLARE @tabla as varchar(100),
+		@cmd as nvarchar(max)
+USE  [INSUDBARG_GV]--cambiar la base
+
+DECLARE cursor_tablas CURSOR FOR 
+SELECT '[' + table_schema + ']' + '.' + '[' + table_name + ']'
+FROM INFORMATION_SCHEMA.TABLES 
+WHERE table_type = 'BASE TABLE' --AND table_name NOT IN ('ProdTotal')
+
+OPEN cursor_tablas
+
+FETCH NEXT FROM cursor_tablas 
+INTO @tabla
+
+WHILE @@FETCH_STATUS = 0
+BEGIN
+	SET @cmd = 'ALTER INDEX ALL ON '+@tabla+' REBUILD'
+    PRINT CONVERT(CHAR(20),GETDATE(),120)+'REINDEXANDO TABLA: ' + upper(@tabla)
+    --PRINT @cmd
+	EXEC sp_executesql @cmd
+    PRINT ''
+    FETCH NEXT FROM cursor_tablas 
+    INTO @tabla
+END --WHILE @@FETCH_STATUS = 0
+
+CLOSE cursor_tablas
+DEALLOCATE cursor_tablas
+
+SET NOCOUNT OFF

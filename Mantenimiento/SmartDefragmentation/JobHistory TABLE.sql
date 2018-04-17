@@ -1,0 +1,16 @@
+USE [Master]
+GO
+CREATE TABLE [dbo].[JobHistory](
+	[Sequence] [int] IDENTITY(1,1) NOT NULL,
+	[JobName] [sysname] NOT NULL,
+	[Output] [varchar](max) NULL,
+	[Date] [datetime] NOT NULL,
+ CONSTRAINT [PK_JobHistory] PRIMARY KEY CLUSTERED 
+(
+	[Date] ASC,
+	[Sequence] ASC
+)WITH (PAD_INDEX = OFF, STATISTICS_NORECOMPUTE = OFF, IGNORE_DUP_KEY = OFF, ALLOW_ROW_LOCKS = ON, ALLOW_PAGE_LOCKS = ON) ON [PRIMARY]
+) ON [PRIMARY] TEXTIMAGE_ON [PRIMARY]
+
+
+

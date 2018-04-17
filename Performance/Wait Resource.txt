@@ -1,0 +1,18 @@
+How To Find Object Name For “wait_resource”
+When querying sys.dm_exec_requests dmv, you can see the waiting requests and the resource those requests are waiting for. Sample of such values are shown in Figure 1 below.
+
+image
+
+Figure 1 – List of wait resources
+
+How do you interpret these values? It has the following format in this case: (It is not always the same format. Depending on the values you see in wait_resource the interpretation would be different)
+
+[database id] : [file id] : [page id]
+
+However still the information is not sufficient because knowing the page id does not give much details related to the issue your troubleshooting. So we need to figure it out the table related to the above page. For that you need to use some undocumented DBCC commands. (Please be careful when running them in production system)
+
+DBCC TRACEON (3604)
+GO
+DBCC PAGE (5, 20, 56792898)
+GO
+DBCC TRACEOFF (3604)

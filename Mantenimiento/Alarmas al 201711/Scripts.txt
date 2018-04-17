@@ -1,0 +1,905 @@
+USE [master]
+GO
+
+/****** Object:  StoredProcedure [dbo].[AlertSesionesColgadas_SP]    Script Date: 3/11/2017 14:39:54 ******/
+SET ANSI_NULLS ON
+GO
+
+SET QUOTED_IDENTIFIER ON
+GO
+
+
+
+CREATE PROCEDURE [dbo].[AlertSesionesColgadas_SP] (@UmbralSession AS SMALLINT = 60)
+AS
+SET NOCOUNT ON
+SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED 
+
+DECLARE	@query AS NVARCHAR(MAX),
+		@asunto AS  NVARCHAR(255),
+		@CantSesiones AS SMALLINT,
+		@tableHTML NVARCHAR(MAX),
+		@Destinatario VARCHAR(MAX)
+
+CREATE TABLE [##SesionesColgadas](
+		[SPID] SMALLINT,
+		[Block] SMALLINT,
+		[Status] NVARCHAR(30),
+		[LastWaitType] NVARCHAR(60),
+		[StmtText] NVARCHAR(MAX),
+		[DBName] NVARCHAR(128),
+		[CPU] INT,
+		[Physical_IO] BIGINT,
+		[LoginTime] DATETIME,
+		[LastBatch] DATETIME,
+		[OpenTran] INT,
+		[HostName] NVARCHAR(128),
+		[LoginName] NVARCHAR(128),
+		[NetLibrary] NVARCHAR(40),
+		[DurationSeg] INT,)
+
+		
+	SELECT @query = '
+	SET NOCOUNT ON;
+	INSERT INTO [##SesionesColgadas]
+	SELECT	s.session_id AS SPID,
+			r.blocking_session_id AS Block,
+			s.status AS Status,
+			r.last_wait_type AS LastWaitType,
+			SUBSTRING(st.text, (r.statement_start_offset/2)+1, 
+			((CASE r.statement_end_offset
+			  WHEN -1 THEN DATALENGTH(st.text)
+			  ELSE r.statement_end_offset
+			  END - r.statement_start_offset)/2) + 1) as StmtText,
+			db_name(r.database_id) AS DBName,
+			r.cpu_time AS CPU,
+			r.reads+r.writes AS Physical_IO,
+			s.login_time AS LoginTime, 
+			s.last_request_end_time AS LastBatch,
+			r.open_transaction_count AS TransCount,
+			CONVERT(VARCHAR(20),s.host_name) as HostName,
+			CONVERT(VARCHAR(25),s.login_name) as LoginName,
+			c.net_transport as NetLibrary,
+			CASE s.last_request_end_time 
+					WHEN ''1900-01-01 00:00:00.000'' THEN DATEDIFF(mi,login_time,getdate())			  
+					ELSE DATEDIFF(ss,s.last_request_end_time,getdate())
+			END AS DurationSeg
+	  FROM sys.dm_exec_sessions as s
+	  JOIN sys.dm_exec_requests as r
+			ON r.session_id = s.session_id
+	  JOIN sys.dm_exec_connections c
+			ON c.session_id = s.session_id
+	 CROSS APPLY sys.dm_exec_sql_text(r.sql_handle) as st
+	WHERE s.session_id > 50 AND 
+				s.status NOT IN (''sleeping'',''background'') AND
+				r.command NOT LIKE ''%BACKUP%'' AND
+				s.session_id <> @@spid AND
+				s.login_name NOT IN (''NT AUTHORITY\SYSTEM'',''SOSIVA\SQLService'',''SOSIVA\Fchantada'') AND
+				CASE s.last_request_end_time 
+					WHEN ''1900-01-01 00:00:00.000'' THEN DATEDIFF(mi,login_time,getdate())			  
+					ELSE DATEDIFF(ss,s.last_request_end_time,getdate())
+				END > '+CONVERT(VARCHAR(4),@UmbralSession)+'
+	ORDER BY 15 DESC'
+
+--PRINT @query
+EXEC (@query)
+--SELECT * FROM [##SesionesColgadas]
+--ENVIO ALERTA SI SUPERO EL UMBRAL
+IF EXISTS(SELECT * FROM [##SesionesColgadas])
+BEGIN
+	SELECT @cantsesiones = COUNT(*) FROM [##SesionesColgadas]
+	SELECT @Destinatario = email_address FROM msdb.dbo.sysoperators WHERE name = 'DBA'
+	SET @asunto = '**ALERT_SESSION** Total:'+CONVERT(VARCHAR(3),@CantSesiones)+' - Threshold: '+CONVERT(VARCHAR(4),@UmbralSession)+' sec - Time: ' + CONVERT(VARCHAR(8),CONVERT(TIME,GETDATE()))
+	SET @tableHTML=N'<table border="1"><FONT FACE="Courier New" font size="2">' +
+				N'<tr>
+				<th align="left">SPID</th>
+				<th align="left">Block</th>
+				<th align="left">Status</th>
+				<th align="left">LastWaitType</th>
+				<th align="left">StmtText</th>
+				<th align="left">DBName</th>
+				<th align="left">CPU</th>
+				<th align="left">Physical_IO</th>
+				<th align="left">LoginTime</th>
+				<th align="left">LastBatch</th>
+				<th align="left">OpenTran</th>
+				<th align="left">HostName</th>
+				<th align="left">LoginName</th>
+				<th align="left">NetLibrary</th>
+				<th align="left">DurationSeg</th>
+				</tr>' +
+				CAST((
+				SELECT	TOP 50
+				td = CONVERT(VARCHAR(4),[SPID])+ ' ','',
+				td = CONVERT(CHAR(1),[Block])+ ' ','',
+				td = CONVERT(VARCHAR(50),[Status])+ ' ','',
+				td = CONVERT(VARCHAR(50),[LastWaitType])+ ' ','',
+				td = CONVERT(VARCHAR(5000),[StmtText])+ ' ','',
+				td = CONVERT(VARCHAR(50),[DBName])+ ' ','',
+				td = CONVERT(VARCHAR(10),[CPU])+ ' ','',
+				td = CONVERT(VARCHAR(10),[Physical_IO])+ ' ','',
+				td = CONVERT(VARCHAR(16),[LoginTime],120)+ ' ','',
+				td = CONVERT(VARCHAR(16),[LastBatch],120)+ ' ','',
+				td = CONVERT(CHAR(1),[OpenTran])+ ' ','',
+				td = CONVERT(VARCHAR(50),[HostName])+ ' ','',
+				td = CONVERT(VARCHAR(50),[LoginName])+ ' ','',
+				td = CONVERT(VARCHAR(10),[NetLibrary])+ ' ','',
+				td = CONVERT(VARCHAR(20),[DurationSeg])+ ' ',''
+				FROM [##SesionesColgadas]
+				ORDER BY DurationSeg DESC
+				FOR XML PATH('tr'), TYPE
+				) AS NVARCHAR(MAX))+N'</table></FONT>'
+
+	
+	EXEC msdb.dbo.sp_send_dbmail @profile_name = 'SQLSERVICES',
+								--@recipients = 'fchantada@agea.com.ar',
+							    @recipients = @Destinatario,
+								@subject = @asunto,
+								@body_format = 'HTML',
+								@body = @tableHTML
+END
+
+DROP TABLE [##SesionesColgadas]
+
+SET NOCOUNT OFF
+
+
+
+GO
+
+/****** Object:  StoredProcedure [dbo].[BackupRestoreState_SP]    Script Date: 3/11/2017 14:39:55 ******/
+SET ANSI_NULLS ON
+GO
+
+SET QUOTED_IDENTIFIER ON
+GO
+
+
+
+Create PROC [dbo].[BackupRestoreState_SP] AS
+BEGIN
+SELECT
+ PERCENT_COMPLETE AS [COMPLETED (%)]
+ ,COMMAND AS [ACTIVITY]
+ ,START_TIME AS [ACTIVITY START TIME]
+ ,SD.NAME AS [DATABASE NAME]
+ ,DATEADD(MS,ESTIMATED_COMPLETION_TIME,GETDATE()) AS [TOTAL TIME REMAINING]
+ ,((ESTIMATED_COMPLETION_TIME/1000/60))/60 AS [REMAINING TIME IN HOURS]
+ ,(ESTIMATED_COMPLETION_TIME/1000/60) AS [REMAINING TIME IN MINUTES]
+ FROM SYS.DM_EXEC_REQUESTS ER
+ INNER JOIN SYS.DATABASES SD
+ ON ER.DATABASE_ID = SD.DATABASE_ID
+ WHERE COMMAND LIKE '%RESTORE%'
+ OR COMMAND LIKE '%BACKUP%'
+ AND ESTIMATED_COMPLETION_TIME > 0
+END
+
+
+
+
+GO
+
+/****** Object:  StoredProcedure [dbo].[CheckDB_SP]    Script Date: 3/11/2017 14:39:56 ******/
+SET ANSI_NULLS ON
+GO
+
+SET QUOTED_IDENTIFIER ON
+GO
+
+
+
+CREATE PROC [dbo].[CheckDB_SP]
+--WITH EXECUTE AS 'sa'
+AS
+SET NOCOUNT ON
+EXEC master.dbo.InsertJobHistory_SP @JobName='DBA - CheckDB', @Output = 'INICIO PROCESO'
+DECLARE @dbname sysname,
+		@cmd as nvarchar(max),
+		@msj VARCHAR(MAX)
+
+DECLARE cursor_db CURSOR FOR 
+SELECT name
+FROM sys.databases 
+WHERE name <> 'tempdb'
+
+OPEN cursor_db
+
+FETCH NEXT FROM cursor_db 
+INTO @dbname
+
+WHILE @@FETCH_STATUS = 0
+BEGIN
+	SET @cmd = 'DBCC CHECKDB(['+@dbname+'],NOINDEX)'
+	SET @msj = 'INICIO '+@cmd
+	EXEC master.dbo.InsertJobHistory_SP @JobName='DBA - CheckDB', @Output = @msj
+	EXEC sp_executesql @cmd
+	--PRINT @cmd
+	SET @msj = 'FIN '+@cmd
+	EXEC master.dbo.InsertJobHistory_SP @JobName='DBA - CheckDB', @Output = @msj
+    FETCH NEXT FROM cursor_db 
+    INTO @dbname
+END --WHILE @@FETCH_STATUS = 0
+
+CLOSE cursor_db
+DEALLOCATE cursor_db
+EXEC master.dbo.InsertJobHistory_SP @JobName='DBA - CheckDB', @Output = 'FIN PROCESO'
+SET NOCOUNT OFF
+
+
+
+
+GO
+
+/****** Object:  StoredProcedure [dbo].[ControlProceso_sp]    Script Date: 3/11/2017 14:39:57 ******/
+SET ANSI_NULLS ON
+GO
+
+SET QUOTED_IDENTIFIER ON
+GO
+
+
+
+CREATE PROCEDURE [dbo].[ControlProceso_sp]
+AS
+SET NOCOUNT ON
+declare @musu           varchar(50)
+declare @musu_nt        varchar(50)
+declare @mter           varchar(50)
+declare @mspid          int
+declare @mspid2         varchar(50)
+declare @cant2          varchar(50)
+declare @cant           int
+
+select  @mspid = 0
+
+select  @musu = suser_name(uid), @mspid = spid, @musu_nt = nt_username, @mter = hostname
+from    master..sysprocesses
+where   spid in (select blocked from master..sysprocesses where blocked <> 0) and blocked = 0
+
+select  @cant = count(*)
+from    master..sysprocesses
+where   blocked <> 0
+
+if @cant = 0
+	begin
+		select 'NO HAY BLOQUEOS'
+	end
+else
+	begin
+		select @cant2     = 'Cantidad de Blockeos :' + convert(varchar(10), @cant)
+		select @mter      = 'Equipo               :' + @mter
+		select @mspid2    = 'Id de proceso        :' + convert(varchar(50), @mspid)
+		select @musu_nt   = 'Usuario NT           :' + @musu_nt
+		select @musu      = 'Usuario SQL          :' + @musu
+
+		print'********** PROCESO QUE BLOQUEA **********'
+		print''
+		print @cant2
+		print @mter
+		print @mspid2
+		print @musu_nt
+		print @musu
+		print'*****************************************'
+
+		dbcc inputbuffer(@mspid) WITH NO_INFOMSGS
+
+		print 'SPID Lockeante'
+		select spid, status, convert (varchar, loginame) as Login, convert (varchar, hostname) as HostName, 
+		       convert (smallint, blocked) as blkby, DBName = convert (varchar, db_name(dbid)), 
+		       convert (char(20), cmd) as command, convert (int, cpu) as cputime, 
+                       convert (bigint, physical_io) as DiskIO, last_batch
+		from master..sysprocesses
+		where spid = @mspid
+
+		print 'SPIDs Lockeados'
+		select spid, status, convert (varchar, loginame) as Login, convert (varchar, hostname) as HostName, 
+		       convert (smallint, blocked) as BlkBy, DBName = convert (varchar, db_name(dbid)), 
+		       convert (char(20), cmd) as Command, convert (int, cpu) as CPUTime, 
+                       convert (bigint, physical_io) as DiskIO, Last_Batch
+		from master..sysprocesses
+		where blocked <> 0 and 
+                      cmd not in ('LAZY WRITER', 
+				  'LOG WRITER', 
+				  'SIGNAL HANDLER', 
+				  'LOCK MONITOR', 
+				  'TASK MANAGER', 
+				  'CHECKPOINT SLEEP')                     
+             	
+	end
+
+SET NOCOUNT OFF
+
+
+
+GO
+
+/****** Object:  StoredProcedure [dbo].[DeleteTopExecPlanRunning_SP]    Script Date: 3/11/2017 14:39:57 ******/
+SET ANSI_NULLS ON
+GO
+
+SET QUOTED_IDENTIFIER ON
+GO
+
+CREATE PROC [dbo].[DeleteTopExecPlanRunning_SP] (@cant int = 10)
+AS
+BEGIN
+SELECT ROW_NUMBER() OVER(ORDER BY count(*) DESC) as Row_Number,st.text,r.plan_handle,count(*) as cantidad
+INTO #sesiones
+	  FROM sys.dm_exec_sessions as s
+	  JOIN sys.dm_exec_requests as r
+			ON r.session_id = s.session_id
+	  JOIN sys.dm_exec_connections c
+			ON c.session_id = s.session_id
+	 CROSS APPLY sys.dm_exec_sql_text(r.sql_handle) as st
+	WHERE s.session_id > 50 AND 
+				s.status NOT IN ('sleeping','background') AND
+				s.session_id <> @@spid --AND
+				--CASE s.last_request_end_time 
+				--	WHEN '1900-01-01 00:00:00.000' THEN DATEDIFF(mi,login_time,getdate())			  
+				--	ELSE DATEDIFF(SECOND,s.last_request_end_time,getdate())
+				--END > 1*60 AND
+				--s.host_name IN ('WEBSERVER2-D','WEBSERVER2-E','WEBSERVER1-D','WEBSERVER1-E','resizer-spot')
+GROUP BY st.text,r.plan_handle,r.statement_start_offset
+
+declare  @plan_handle as varbinary(64)
+
+select @plan_handle = plan_handle 
+from #sesiones
+where Row_Number = 1 and cantidad >= @cant
+
+IF @plan_handle IS NOT NULL
+BEGIN
+	DBCC FREEPROCCACHE(@plan_handle)
+	select *
+	from #sesiones
+	where Row_Number = 1 and cantidad >= @cant
+END
+ELSE
+	select 'No Execution Plans que eliminar con dichas condiciones'
+
+DROP TABLE #sesiones
+
+END
+GO
+
+/****** Object:  StoredProcedure [dbo].[EnvioAlertaDiskSpace_SP]    Script Date: 3/11/2017 14:39:58 ******/
+SET ANSI_NULLS ON
+GO
+
+SET QUOTED_IDENTIFIER ON
+GO
+
+
+
+CREATE PROC [dbo].[EnvioAlertaDiskSpace_SP](@umbral VARCHAR(4))
+AS
+SET NOCOUNT ON
+DECLARE @asunto AS  NVARCHAR(255),
+		@tableHTML NVARCHAR(MAX),
+		@query NVARCHAR(MAX),
+		@Destinatario VARCHAR(MAX)
+
+--DECLARE @umbral VARCHAR(4)
+--SET @umbral = 200
+
+SET @query = '
+SELECT DISTINCT
+  vs.volume_mount_point AS [Drive],
+  vs.logical_volume_name AS [DriveName],
+  vs.total_bytes/1024/1024 AS [SizeMB],
+  vs.available_bytes/1024/1024 AS [FreeSpaceMB],
+  (vs.available_bytes*100)/vs.total_bytes AS [FreeSpace%]
+INTO ##SpaceDisk
+FROM sys.master_files AS f
+CROSS APPLY sys.dm_os_volume_stats(f.database_id, f.file_id) AS vs
+WHERE (vs.available_bytes*100)/vs.total_bytes < '+@umbral+'
+ORDER BY vs.volume_mount_point'
+
+--print @query
+
+EXEC sp_executesql @query
+
+IF EXISTS (SELECT * from ##SpaceDisk)
+BEGIN
+	SET @tableHTML=N'<table border="1"><FONT FACE="Courier New" font size="2">' +
+				N'<tr>
+				<th align="left">Drive</th>
+				<th align="left">DriveName</th>
+				<th align="left">SizeMB</th>
+				<th align="left">FreeSpaceMB</th>
+				<th align="left">FreeSpace%</th>
+				</tr>' +
+				CAST((
+				SELECT	
+				td = CONVERT(VARCHAR(50),Drive)+ ' ','',
+				td = CONVERT(VARCHAR(50),DriveName)+ ' ','',
+				td = CONVERT(VARCHAR(50),SizeMB)+ ' ','',
+				td = CONVERT(VARCHAR(50),FreeSpaceMB)+ ' ','',
+				td = CONVERT(VARCHAR(50),[FreeSpace%])+ ' ',''
+				FROM ##SpaceDisk
+				FOR XML PATH('tr'), TYPE
+				) AS NVARCHAR(MAX))+N'</table></FONT>'
+
+	SET @asunto = '**ALERT_DISKSPACE** INST: '+@@SERVERNAME+' - UMBRAL < '+CONVERT(VARCHAR(6),@umbral)+'% Espacio Libre'
+	SELECT @Destinatario = email_address FROM msdb.dbo.sysoperators WHERE name = 'DBA'
+
+	EXEC msdb.dbo.sp_send_dbmail @profile_name = 'SQLSERVICES',
+								--@recipients = 'fchantada@agea.com.ar',
+								@recipients = @Destinatario,
+								@subject = @asunto,
+								@body_format = 'HTML',
+								@body = @tableHTML
+END
+DROP TABLE ##SpaceDisk
+SET NOCOUNT OFF
+
+
+
+GO
+
+/****** Object:  StoredProcedure [dbo].[EnvioAlertaTLog_SP]    Script Date: 3/11/2017 14:39:58 ******/
+SET ANSI_NULLS ON
+GO
+
+SET QUOTED_IDENTIFIER ON
+GO
+
+
+
+
+CREATE PROC [dbo].[EnvioAlertaTLog_SP] (@dbname SYSNAME = 'master')
+AS
+SET NOCOUNT ON
+DECLARE @asunto AS  NVARCHAR(255),
+		@tableHTML NVARCHAR(MAX),
+		@query NVARCHAR(MAX),
+		@Destinatario VARCHAR(MAX)
+
+SET @query = 'USE ['+@dbname+'];
+SELECT	db_name() AS [DBName],
+		sum(round(a.size/128.,2)) AS [FileSizeMB],
+		sum(round((a.size-fileproperty(a.name,''SpaceUsed''))/128.,2))*100/sum(round(a.size/128.,2)) AS [UnusedSpace],
+		DATABASEPROPERTYEX('''+@dbname+''',''Recovery'') AS [RecoveryModel],
+		(SELECT MAX(backup_finish_date) FROM msdb.dbo.backupset WHERE type = ''L'' AND database_name = db_name() GROUP BY database_name) AS [LastBkpTlogDate]
+INTO ##Logsize
+FROM sysfiles a
+WHERE a.groupid = 0
+GROUP BY a.groupid'
+
+--print @query
+
+EXEC sp_executesql @query
+
+SET @tableHTML=N'<table border="1"><FONT FACE="Courier New" font size="2">' +
+				N'<tr>
+				<th align="left">DBName</th>
+				<th align="left">FileSizeMB</th>
+				<th align="left">UnusedSpace%</th>
+				<th align="left">RecoveryModel</th>
+				<th align="left">LastBkpTlogDate</th>
+				</tr>' +
+				CAST((
+				SELECT	
+				td = DBName+ ' ','',
+				td = CONVERT(VARCHAR(20),FileSizeMB)+ ' ','',
+				td = CONVERT(VARCHAR(20),UnusedSpace)+ ' ','',
+				td = CONVERT(VARCHAR(20),RecoveryModel)+ ' ','',
+				td = CONVERT(VARCHAR(20),LastBkpTlogDate,120)+ ' ',''
+				FROM ##Logsize
+				FOR XML PATH('tr'), TYPE
+				) AS NVARCHAR(MAX))+N'</table></FONT>'
+
+DROP TABLE ##Logsize
+
+ SET @asunto = '**ALERT_T-LOG** Database: '+@dbname+' - Threshold: 90% Used'+' Time: ' + CONVERT(VARCHAR(8),CONVERT(TIME,GETDATE()))
+ SELECT @Destinatario = email_address FROM msdb.dbo.sysoperators WHERE name = 'DBA'
+
+ EXEC msdb.dbo.sp_send_dbmail @profile_name = 'SQLSERVICES',
+								--@recipients = 'fchantada@agea.com.ar',
+								@recipients = @Destinatario,
+								@subject = @asunto,
+								@body_format = 'HTML',
+								@body = @tableHTML
+
+SET NOCOUNT OFF
+
+
+
+
+
+GO
+
+/****** Object:  StoredProcedure [dbo].[EnvioAlertaUserConnections_SP]    Script Date: 3/11/2017 14:39:59 ******/
+SET ANSI_NULLS ON
+GO
+
+SET QUOTED_IDENTIFIER ON
+GO
+
+
+
+CREATE PROC [dbo].[EnvioAlertaUserConnections_SP]
+AS
+SET NOCOUNT ON
+DECLARE @asunto AS  NVARCHAR(255),
+		@tableHTML NVARCHAR(MAX),
+		@query NVARCHAR(MAX),
+		@total INT,
+		@idle INT,
+		@Destinatario VARCHAR(MAX)
+
+SET @query = 'SELECT [Program_Name] AS [ProgramName],
+					[Hostname],
+					[Loginame],
+					db_name(dbid) AS [Dbname],
+					count(*) as Total,
+					COUNT(CASE WHEN (DATEDIFF(mi,last_batch,getdate())>=5 AND STATUS = ''SLEEPING'') THEN 1 END) AS [Idle5min]
+	INTO ##sesiones
+	FROM sys.sysprocesses
+	WHERE hostname NOT IN ('''') and loginame <> ''''
+	GROUP BY [Program_Name],[Hostname],[Loginame],db_name(dbid)
+	ORDER BY [Program_Name],[Hostname]'
+
+--print @query
+
+EXEC sp_executesql @query
+
+SET @tableHTML=N'<table border="1"><FONT FACE="Courier New" font size="2">' +
+				N'<tr>
+				<th align="left">ProgramName</th>
+				<th align="left">HostName</th>
+				<th align="left">LoginName</th>
+				<th align="left">DbName</th>
+				<th align="left">Total</th>
+				<th align="left">Idle5min</th>
+				</tr>' +
+				CAST((
+				SELECT	
+				td = CONVERT(VARCHAR(50),[ProgramName])+ ' ','',
+				td = CONVERT(VARCHAR(50),[Hostname])+ ' ','',
+				td = CONVERT(VARCHAR(50),[Loginame])+ ' ','',
+				td = CONVERT(VARCHAR(50),[Dbname])+ ' ','',
+				td = CONVERT(VARCHAR(20),[Total])+ ' ','',
+				td = CONVERT(VARCHAR(20),[Idle5min])+ ' ',''
+				FROM ##sesiones
+				FOR XML PATH('tr'), TYPE
+				) AS NVARCHAR(MAX))+N'</table></FONT>'
+
+SELECT @total = SUM(total), 
+	   @idle = SUM([Idle5min])
+FROM ##sesiones
+
+DROP TABLE ##sesiones
+
+SET @asunto = '**ALERT_TOTALSESSION** Total: '+CONVERT(VARCHAR(6),@total)+' - Idle_To_Kill: '+CONVERT(VARCHAR(6),@idle)+' - Time: ' + CONVERT(VARCHAR(8),CONVERT(TIME,GETDATE()))
+SELECT @Destinatario = email_address FROM msdb.dbo.sysoperators WHERE name = 'DBA'
+
+EXEC msdb.dbo.sp_send_dbmail @profile_name = 'SQLSERVICES',
+								--@recipients = 'fchantada@agea.com.ar',
+								@recipients = @Destinatario,
+								@subject = @asunto,
+								@body_format = 'HTML',
+								@body = @tableHTML
+
+SET NOCOUNT OFF
+
+
+
+
+
+GO
+
+/****** Object:  StoredProcedure [dbo].[EnvioSesionesBloqueadas_SP]    Script Date: 3/11/2017 14:40:00 ******/
+SET ANSI_NULLS ON
+GO
+
+SET QUOTED_IDENTIFIER ON
+GO
+
+
+
+CREATE PROC [dbo].[EnvioSesionesBloqueadas_SP]
+AS
+SET NOCOUNT ON
+SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED  
+DECLARE @asunto AS  NVARCHAR(255),
+		@CantSesiones AS SMALLINT,
+		@Umbral AS SQL_VARIANT,
+		@tableHTML NVARCHAR(MAX),
+		@Destinatario VARCHAR(MAX)
+
+SELECT db.name AS DBName,
+		tl.request_session_id AS RqstSPID,
+		se1.login_name AS RqstLogin,
+		h1.TEXT AS RequestText,
+		wt.blocking_session_id AS BlkSPID,
+		se2.login_name AS BlkLogin,
+		h2.TEXT AS BlockingText,
+		wt.wait_duration_ms AS DurSec,
+		tl.resource_type AS Type,
+		tl.request_mode AS Mode
+INTO #Bloqueos
+FROM sys.dm_tran_locks AS tl INNER JOIN sys.databases db ON db.database_id = tl.resource_database_id 
+							INNER JOIN sys.dm_os_waiting_tasks AS wt ON tl.lock_owner_address = wt.resource_address
+							INNER JOIN sys.dm_exec_connections ec1 ON ec1.session_id = tl.request_session_id
+							INNER JOIN sys.dm_exec_connections ec2 ON ec2.session_id = wt.blocking_session_id
+							CROSS APPLY sys.dm_exec_sql_text(ec1.most_recent_sql_handle) AS h1
+							CROSS APPLY sys.dm_exec_sql_text(ec2.most_recent_sql_handle) AS h2
+							INNER JOIN sys.dm_exec_sessions AS se1 ON ec1.session_id = se1.session_id
+							INNER JOIN sys.dm_exec_sessions AS se2 ON ec2.session_id = se2.session_id
+
+SELECT @cantsesiones = COUNT(*) FROM #Bloqueos
+							
+IF @CantSesiones > 0
+BEGIN
+ SELECT @Umbral = value FROM sys.configurations where name = 'blocked process threshold (s)'
+
+ SET @tableHTML=N'<table border="1"><FONT FACE="Courier New" font size="2">' +
+				N'<tr>
+				<th align="left">DBName</th>
+				<th align="left">RqstSPID</th>
+				<th align="left">RqstLogin</th>
+				<th align="left">RequestText</th>
+				<th align="left">BlkSPID</th>
+				<th align="left">BlkLogin</th>
+				<th align="left">BlockingText</th>
+				<th align="left">DurSec</th>
+				<th align="left">Type</th>
+				<th align="left">Mode</th>
+				</tr>' +
+				CAST((
+				SELECT td = CONVERT(VARCHAR(15),DBName)+ ' ','',
+				td = CONVERT(CHAR(4),RqstSPID)+ ' ','',
+				td = CONVERT(VARCHAR(20),RqstLogin)+ ' ','',
+				td = CONVERT(VARCHAR(500),REPLACE(REPLACE(REPLACE(REPLACE(RequestText,CHAR(13),' '),CHAR(10),' '),CHAR(8),' '),CHAR(9),' '))+ ' ','',
+				td = CONVERT(CHAR(4),BlkSPID)+ ' ','',
+				td = CONVERT(VARCHAR(20),BlkLogin)+ ' ','',
+				td = CONVERT(VARCHAR(500),REPLACE(REPLACE(REPLACE(REPLACE(BlockingText,CHAR(13),' '),CHAR(10),' '),CHAR(8),' '),CHAR(9),' '))+ ' ','',
+				td = CONVERT(VARCHAR(14),(DurSec)/1000)+ ' ','',
+				td = CONVERT(VARCHAR(8),Type)+ ' ','',
+				td = CONVERT(VARCHAR(4),Mode)+ ' ',''
+				FROM #Bloqueos
+				FOR XML PATH('tr'), TYPE
+				) AS NVARCHAR(MAX))+N'</table></FONT>'
+
+
+ SET @asunto = '**ALERT_BLKDSESSION** Total:'+CONVERT(VARCHAR(3),@CantSesiones)+' - Threshold: '+CONVERT(VARCHAR(4),@Umbral)+' sec - Time: ' + CONVERT(VARCHAR(8),CONVERT(TIME,GETDATE()))
+ SELECT @Destinatario = email_address FROM msdb.dbo.sysoperators WHERE name = 'DBA'
+
+ EXEC msdb.dbo.sp_send_dbmail @profile_name = 'SQLSERVICES',
+								--@recipients = 'fchantada@agea.com.ar',
+								@recipients = @Destinatario,
+								@subject = @asunto,
+								@body_format = 'HTML',
+								@body = @tableHTML
+
+END
+DROP TABLE #Bloqueos
+SET NOCOUNT OFF
+
+
+
+
+
+
+GO
+
+/****** Object:  StoredProcedure [dbo].[GetBlockingTree]    Script Date: 3/11/2017 14:40:00 ******/
+SET ANSI_NULLS ON
+GO
+
+SET QUOTED_IDENTIFIER ON
+GO
+
+CREATE PROC [dbo].[GetBlockingTree]
+AS
+SET NOCOUNT ON
+SELECT SPID, BLOCKED, REPLACE (REPLACE (T.TEXT, CHAR(10), ' '), CHAR (13), ' ' ) AS BATCH
+INTO #T
+FROM sys.sysprocesses R CROSS APPLY sys.dm_exec_sql_text(R.SQL_HANDLE) T
+
+GO
+
+/****** Object:  StoredProcedure [dbo].[InsertJobHistory_SP]    Script Date: 3/11/2017 14:40:01 ******/
+SET ANSI_NULLS ON
+GO
+
+SET QUOTED_IDENTIFIER ON
+GO
+
+
+
+CREATE PROC [dbo].[InsertJobHistory_SP] (@JobName SYSNAME, @Output VARCHAR(MAX))
+AS
+SET NOCOUNT ON
+BEGIN
+	INSERT INTO dbo.JobHistory (JobName,Output,Date)
+	SELECT @JobName,@Output,GETDATE()
+END
+SET NOCOUNT OFF
+
+
+
+
+GO
+
+/****** Object:  StoredProcedure [dbo].[mata_conexion]    Script Date: 3/11/2017 14:40:01 ******/
+SET ANSI_NULLS ON
+GO
+
+SET QUOTED_IDENTIFIER ON
+GO
+
+
+
+CREATE proc [dbo].[mata_conexion]
+@base varchar(30)
+as
+create table #temp_kill
+(descrip varchar(30))
+insert into #temp_kill
+select convert(char(5),spid)
+from master..sysprocesses
+where dbid= db_id(@base)
+
+declare 
+	 @comando varchar(30),
+	 @descrip varchar(30)
+
+declare cont_kill cursor for
+	select * from #temp_kill
+
+open cont_kill
+fetch next from cont_kill into @descrip
+while (@@fetch_status <> -1)
+begin
+	select @comando = ('kill ' + @descrip)
+	exec (@comando)
+	fetch next from cont_kill into @descrip
+end
+deallocate cont_kill
+drop table #temp_kill
+
+
+
+
+
+
+
+
+GO
+
+/****** Object:  StoredProcedure [dbo].[MataConexionesColgadas_SP]    Script Date: 3/11/2017 14:40:02 ******/
+SET ANSI_NULLS ON
+GO
+
+SET QUOTED_IDENTIFIER ON
+GO
+
+CREATE PROC [dbo].[MataConexionesColgadas_SP] (@Minutos AS INT = 5)
+AS
+BEGIN
+SET NOCOUNT ON
+DECLARE @kill AS NVARCHAR(100),
+		@cmd AS NVARCHAR(MAX),
+		@cant AS INT
+
+
+DECLARE cursor_kills CURSOR FOR 
+SELECT	'KILL ' + CONVERT(VARCHAR(5),s.session_id)
+	  FROM sys.dm_exec_sessions as s
+	  JOIN sys.dm_exec_requests as r
+			ON r.session_id = s.session_id
+	  JOIN sys.dm_exec_connections c
+			ON c.session_id = s.session_id
+	 CROSS APPLY sys.dm_exec_sql_text(r.sql_handle) as st
+	WHERE s.session_id > 50 AND 
+				s.status NOT IN ('sleeping','background') AND
+				r.command = 'SELECT' AND
+				s.session_id <> @@spid AND
+				s.login_name NOT IN ('NT AUTHORITY\SYSTEM','SOSIVA\SQLService') AND
+				CASE s.last_request_end_time 
+					WHEN '1900-01-01 00:00:00.000' THEN DATEDIFF(mi,login_time,getdate())			  
+					ELSE DATEDIFF(SECOND,s.last_request_end_time,getdate())
+				END > @Minutos*60 AND
+				s.host_name IN ('WEBSERVER2-D','WEBSERVER2-E','WEBSERVER1-D','WEBSERVER1-E','resizer-spot')
+
+
+
+SELECT @cant = count(*)
+	  FROM sys.dm_exec_sessions as s
+	  JOIN sys.dm_exec_requests as r
+			ON r.session_id = s.session_id
+	  JOIN sys.dm_exec_connections c
+			ON c.session_id = s.session_id
+	 CROSS APPLY sys.dm_exec_sql_text(r.sql_handle) as st
+	WHERE s.session_id > 50 AND 
+				s.status NOT IN ('sleeping','background') AND
+				r.command = 'SELECT' AND
+				s.session_id <> @@spid AND
+				s.login_name NOT IN ('NT AUTHORITY\SYSTEM','SOSIVA\SQLService') AND
+				CASE s.last_request_end_time 
+					WHEN '1900-01-01 00:00:00.000' THEN DATEDIFF(mi,login_time,getdate())			  
+					ELSE DATEDIFF(mi,s.last_request_end_time,getdate())
+				END > @Minutos AND
+				s.host_name IN ('WEBSERVER2-D','WEBSERVER2-E','WEBSERVER1-D','WEBSERVER1-E','resizer-spot')
+
+PRINT '**** Conexiones Colgadas a Matar: '+CONVERT(VARCHAR(4),@cant)+' ****'
+
+
+OPEN cursor_kills
+
+FETCH NEXT FROM cursor_kills INTO @kill
+
+WHILE @@FETCH_STATUS = 0
+BEGIN
+	PRINT @kill
+	EXEC sp_executesql @kill
+    FETCH NEXT FROM cursor_kills INTO @kill
+END --WHILE @@FETCH_STATUS = 0
+
+CLOSE cursor_kills
+DEALLOCATE cursor_kills
+
+SET NOCOUNT OFF
+END
+
+
+
+
+
+
+GO
+
+/****** Object:  StoredProcedure [dbo].[MataConexionesOciosas_SP]    Script Date: 3/11/2017 14:40:03 ******/
+SET ANSI_NULLS ON
+GO
+
+SET QUOTED_IDENTIFIER ON
+GO
+
+
+
+CREATE PROC [dbo].[MataConexionesOciosas_SP] (@Minutos AS INT = 5, @database AS VARCHAR(500))
+AS
+BEGIN
+SET NOCOUNT ON
+DECLARE @kill AS NVARCHAR(100),
+		@cmd AS NVARCHAR(max)--,
+		--@cant AS INT
+
+
+DECLARE cursor_kills CURSOR FOR 
+SELECT 'KILL '+convert (varchar(4),spid) AS TSQL--,last_batch,hostname 
+FROM sys.sysprocesses 
+WHERE db_name(dbid) = @database AND DATEDIFF(mi,last_batch,getdate()) > @minutos AND status = 'SLEEPING'
+ORDER BY last_batch 
+
+--SELECT @cant = count(*)
+--from sysprocesses 
+--WHERE loginame = @database AND DATEDIFF(mi,last_batch,getdate()) > @minutos AND status = 'SLEEPING'
+
+--PRINT '**** Conexiones Ociosas a Matar: '+CONVERT(VARCHAR(4),@cant)+' ****'
+
+OPEN cursor_kills
+
+FETCH NEXT FROM cursor_kills INTO @kill
+
+WHILE @@FETCH_STATUS = 0
+BEGIN
+	--PRINT @kill
+	EXEC sp_executesql @kill
+    FETCH NEXT FROM cursor_kills INTO @kill
+END --WHILE @@FETCH_STATUS = 0
+
+CLOSE cursor_kills
+DEALLOCATE cursor_kills
+
+SET NOCOUNT OFF
+END
+
+
+
+GO
+
+
