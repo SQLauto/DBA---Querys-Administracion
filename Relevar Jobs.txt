@@ -1,0 +1,8 @@
+SELECT a.name,a.enabled,b.step_id,b.subsystem,b.command
+FROM msdb..sysjobs a INNER JOIN msdb..sysjobsteps b
+ON a.job_id = b.job_id
+ORDER BY a.name
+GO
+IF @@VERSION LIKE 'Microsoft SQL Server 2005%'
+  EXEC msdb.dbo.sp_set_sqlagent_properties @alert_replace_runtime_tokens=1
+GO

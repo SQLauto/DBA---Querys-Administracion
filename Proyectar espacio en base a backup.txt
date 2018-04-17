@@ -1,0 +1,69 @@
+SET NOCOUNT ON
+
+/*
+Para calcular crecimiento proyectado a 1 año
+*/
+DECLARE 
+@FechaIni datetime,
+@FechaFin datetime,
+@meses int,
+@maximo int,
+@minimo int,
+@diftam int,
+@DBName varchar(50)
+
+-- SET @DBName = 'PA'
+SET @meses = 12 
+SET @FechaIni = getdate()-360 --dias que representan esos @meses
+SET @FechaFin = getdate()
+
+CREATE TABLE #Backup (
+id int identity,
+DBName varchar(50),
+TamañoActual int,
+RecomendadoMDF int,
+RecomendadoLog int
+)
+
+DECLARE BACKUPS CURSOR LOCAL READ_ONLY FOR
+SELECT [name]
+FROM master.dbo.sysdatabases
+WHERE [name] NOT IN ('master', 'model', 'msdb', 'tempdb', 'pubs', 'northwind')
+AND DATABASEPROPERTYEX ([name], 'Status') <> 'Offline'
+ORDER BY NAME
+
+OPEN BACKUPS 
+
+FETCH NEXT FROM BACKUPS INTO @DBName
+
+WHILE @@FETCH_STATUS = 0
+BEGIN
+SET @maximo = (SELECT MAX(backup_size / 1024 / 1024) -- maximo tamaño de la base de datos
+FROM msdb.dbo.backupset
+WHERE type = 'D'
+AND database_name = @DBName
+AND backup_start_date BETWEEN @FechaIni AND @FechaFin)
+
+SET @minimo = (SELECT MIN(backup_size / 1024 / 1024)
+FROM msdb.dbo.backupset
+WHERE type = 'D'
+AND database_name = @DBName
+AND backup_start_date BETWEEN @FechaIni AND @FechaFin)
+
+SET @diftam = (@maximo - @minimo) --crecimiento del backup de la base de datos
+
+-- Se genera la planilla con los datos recopilados
+
+INSERT INTO #Backup 
+SELECT @dbname, @maximo, (@diftam + @maximo), ((@diftam + @maximo) * 0.2)
+
+FETCH NEXT FROM BACKUPS INTO @DBName
+END
+
+CLOSE BACKUPS
+DEALLOCATE BACKUPS
+
+SELECT id, DBName, TamañoActual, RecomendadoMDF, RecomendadoLog
+FROM #Backup
+
+DROP TABLE #Backup 

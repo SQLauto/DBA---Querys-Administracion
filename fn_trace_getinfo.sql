@@ -1,0 +1,1 @@
+select * from ::fn_trace_getinfo(0)

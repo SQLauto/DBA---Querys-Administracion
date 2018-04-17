@@ -1,0 +1,20 @@
+SELECT	object_name(p.object_id) as table_name,
+		i.name as index_name,
+		p.rows as table_rows,
+		(au.total_pages*8)/1024 as [size_mb],
+		s.user_seeks,
+		s.user_scans,
+		s.user_lookups
+FROM sys.partitions p INNER JOIN sys.allocation_units au 
+							ON p.hobt_id = au.container_id
+					  INNER JOIN sys.indexes i
+							ON p.index_id = i.index_id AND
+							p.object_id = i.object_id
+					  INNER JOIN sys.dm_db_index_usage_stats AS s   
+							ON i.object_id = s.object_id  
+							AND i.index_id = s.index_id		
+WHERE	(s.user_seeks = 0 AND s.user_scans = 0 AND s.user_lookups = 0 ) AND
+		i.type IN (1, 2) AND -- indices Clustered y Nonclustered  			
+		i.is_unique = 0 -- Que no sean Unique
+		--((au.total_pages*8)/1024) > 100
+ORDER BY [size_mb]  desc

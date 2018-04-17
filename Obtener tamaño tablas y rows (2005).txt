@@ -1,0 +1,7 @@
+SELECT	object_name(p.object_id) as table_name,
+		MAX(p.rows) as table_rows,
+		(SUM(au.total_pages)*8)/1024 as [size_mb]
+FROM sys.partitions p INNER JOIN sys.allocation_units au 
+							ON p.hobt_id = au.container_id
+GROUP BY object_name(p.object_id) 
+ORDER BY [size_mb]  desc

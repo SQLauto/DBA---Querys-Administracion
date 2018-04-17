@@ -1,0 +1,13 @@
+SELECT	lg.name AS LoginName,
+		lg.type_desc AS LoginType, 
+		lg.is_disabled AS LoginDisabled,
+		DB_NAME() AS DbName,
+		dp.name AS UserName,
+		user_name(rm.role_principal_id) AS RoleName
+FROM master.sys.server_principals lg INNER JOIN sys.database_principals dp
+										ON lg.sid = dp.sid
+									 INNER JOIN sys.database_role_members rm
+										ON dp.principal_id = rm.member_principal_id
+--WHERE user_name(rm.role_principal_id) = 'db_owner' AND -- Para filtrar por un Schema en Particular
+--		lg.name = '' -- Para filtrar por un Login en Particular
+ORDER BY lg.name

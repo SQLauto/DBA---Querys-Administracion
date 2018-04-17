@@ -1,0 +1,4 @@
+select db_name(dbid),count(*),MAX(last_batch)
+from sys.sysprocesses 
+group by db_name(dbid)
+having db_name(dbid) not in ('master','msdb','tempdb')

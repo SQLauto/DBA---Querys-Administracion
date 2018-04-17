@@ -1,0 +1,23 @@
+CREATE TABLE #testlog(dt datetime, info varchar(200), errtext varchar(max))
+INSERT INTO #testlog
+EXEC sp_readerrorlog
+
+SELECT	TOP 1 
+		destination_database_name,
+		restore_date AS restore_start_date,
+		(SELECT TOP 1 dt FROM #testlog WHERE errtext like '%Database was restored: Database: INSUDBARG_GV%' ORDER BY DT) AS restore_finish_date,
+		restore_type
+FROM msdb..restorehistory 
+WHERE restore_type = 'D' AND destination_database_name = 'INSUDBARG_GV'
+ORDER BY restore_date desc 
+
+SELECT	TOP 1 
+		destination_database_name,
+		restore_date AS restore_start_date,
+		(SELECT TOP 1 dt FROM #testlog WHERE errtext like '%Database changes were restored. Database: INSUDBARG_GV%' ORDER BY DT) AS restore_finish_date,
+		restore_type
+FROM msdb..restorehistory 
+WHERE restore_type = 'I' AND destination_database_name = 'INSUDBARG_GV'
+ORDER BY restore_date desc 
+
+DROP TABLE #testlog

@@ -1,0 +1,1 @@
+UPDATE master..sysdatabases SET status=-32768 WHERE name='<dbname>' 

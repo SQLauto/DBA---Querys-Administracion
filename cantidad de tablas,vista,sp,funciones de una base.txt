@@ -1,0 +1,6 @@
+use SisHist
+select 'Cant. Tablas',count(*) from sysobjects where xtype = 'u' and name not like 'sys%'
+select 'Cant. Vistas',count(*) from sysobjects where xtype = 'v' and name not like 'sys%' and name not like 'syncobj%'
+select 'Cant. SP',count(*) from sysobjects where xtype = 'P' and name not like 'dt_%'
+select 'Cant. Funciones',count(*) from sysobjects where xtype = 'FN'
+select 'Cant. Usuarios',count(*) from sysusers where hasdbaccess = 1 and islogin = 1

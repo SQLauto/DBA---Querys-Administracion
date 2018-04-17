@@ -1,0 +1,5 @@
+-- MSSQL 2000
+EXEC sp_changeobjectowner 'dbo.pepito', 'new_owner'
+
+-- MSSQL 2005\2008
+ALTER SCHEMA [new_schema] TRANSFER [schema].[table]

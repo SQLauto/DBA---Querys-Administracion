@@ -1,0 +1,6 @@
+USE msdb
+GO
+DECLARE @DaysToKeepHistory DATETIME
+SET @DaysToKeepHistory = CONVERT(VARCHAR(10), DATEADD(dd, -365, GETDATE()), 101)
+select @DaysToKeepHistory
+EXEC sp_delete_backuphistory @DaysToKeepHistory

@@ -1,0 +1,68 @@
+SELECT request_session_id sessionid,
+ resource_type type,
+ resource_database_id dbid,
+ OBJECT_NAME(resource_associated_entity_id, resource_database_id) objectname,
+ request_mode rmode,
+ request_status rstatus
+FROM sys.dm_tran_locks
+WHERE resource_type IN ('OBJECT')
+
+
+SELECT DISTINCT
+	CASE DTL.REQUEST_SESSION_ID
+		WHEN -2 THEN 'ORPHANED DISTRIBUTED TRANSACTION'
+		WHEN -3 THEN 'DEFERRED RECOVERY TRANSACTION'
+		ELSE DTL.REQUEST_SESSION_ID END AS SPID,
+DB_NAME(DTL.RESOURCE_DATABASE_ID) AS DATABASENAME,
+SO.NAME AS LOCKEDOBJECTNAME,
+DTL.RESOURCE_TYPE AS LOCKEDRESOURCE,
+DTL.REQUEST_MODE AS LOCKTYPE,
+ST.TEXT AS SQLSTATEMENTTEXT,
+ES.LOGIN_NAME AS LOGINNAME,
+ES.HOST_NAME AS HOSTNAME,
+CASE TST.IS_USER_TRANSACTION
+	WHEN 0 THEN 'SYSTEM TRANSACTION'
+	WHEN 1 THEN 'USER TRANSACTION' END AS USER_OR_SYSTEM_TRANSACTION,AT.NAME AS TRANSACTIONNAME,DTL.REQUEST_STATUS
+
+FROM
+SYS.DM_TRAN_LOCKS DTL JOIN SYS.PARTITIONS SP 
+							ON SP.HOBT_ID = DTL.RESOURCE_ASSOCIATED_ENTITY_ID
+					JOIN SYS.OBJECTS SO 
+							ON SO.OBJECT_ID = SP.OBJECT_ID
+					JOIN SYS.DM_EXEC_SESSIONS ES 
+							ON ES.SESSION_ID = DTL.REQUEST_SESSION_ID
+					JOIN SYS.DM_TRAN_SESSION_TRANSACTIONS TST 
+							ON ES.SESSION_ID = TST.SESSION_ID
+					JOIN SYS.DM_TRAN_ACTIVE_TRANSACTIONS AT 
+							ON TST.TRANSACTION_ID = AT.TRANSACTION_ID
+					JOIN SYS.DM_EXEC_CONNECTIONS EC 
+							ON EC.SESSION_ID = ES.SESSION_ID
+					CROSS APPLY SYS.DM_EXEC_SQL_TEXT(EC.MOST_RECENT_SQL_HANDLE) AS ST
+
+WHERE
+	RESOURCE_DATABASE_ID = DB_ID()
+
+
+
+NULL = No access is granted to the resource. Serves as a placeholder.
+Sch-S = Schema stability. Ensures that a schema element, such as a table or index, is not dropped while any session holds a schema stability lock on the schema element.
+Sch-M = Schema modification. Must be held by any session that wants to change the schema of the specified resource. Ensures that no other sessions are referencing the indicated object.
+S = Shared. The holding session is granted shared access to the resource.
+U = Update. Indicates an update lock acquired on resources that may eventually be updated. It is used to prevent a common form of deadlock that occurs when multiple sessions lock resources for potential update at a later time.
+X = Exclusive. The holding session is granted exclusive access to the resource.
+IS = Intent Shared. Indicates the intention to place S locks on some subordinate resource in the lock hierarchy.
+IU = Intent Update. Indicates the intention to place U locks on some subordinate resource in the lock hierarchy.
+IX = Intent Exclusive. Indicates the intention to place X locks on some subordinate resource in the lock hierarchy.
+SIU = Shared Intent Update. Indicates shared access to a resource with the intent of acquiring update locks on subordinate resources in the lock hierarchy.
+SIX = Shared Intent Exclusive. Indicates shared access to a resource with the intent of acquiring exclusive locks on subordinate resources in the lock hierarchy.
+UIX = Update Intent Exclusive. Indicates an update lock hold on a resource with the intent of acquiring exclusive locks on subordinate resources in the lock hierarchy.
+BU = Bulk Update. Used by bulk operations.
+RangeS_S = Shared Key-Range and Shared Resource lock. Indicates serializable range scan.
+RangeS_U = Shared Key-Range and Update Resource lock. Indicates serializable update scan.
+RangeI_N = Insert Key-Range and Null Resource lock. Used to test ranges before inserting a new key into an index.
+RangeI_S = Key-Range Conversion lock. Created by an overlap of RangeI_N and S locks.
+RangeI_U = Key-Range Conversion lock created by an overlap of RangeI_N and U locks.
+RangeI_X = Key-Range Conversion lock created by an overlap of RangeI_N and X locks.
+RangeX_S = Key-Range Conversion lock created by an overlap of RangeI_N and RangeS_S. locks.
+RangeX_U = Key-Range Conversion lock created by an overlap of RangeI_N and RangeS_U locks.
+RangeX_X = Exclusive Key-Range and Exclusive Resource lock. This is a conversion lock used when updating a key in a range.

@@ -1,0 +1,12 @@
+SELECT  x.*,
+        LocalServerConnectionString = cm.value('declare namespace DTS="www.microsoft.com/SqlServer/Dts";DTS:ObjectData[1]/DTS:ConnectionManager[1]/@DTS:ConnectionString', 'varchar(1000)')
+FROM (
+    SELECT  id, name, packageXML = CAST(CAST(packagedata AS VARBINARY(MAX)) AS XML)
+    FROM dbo.sysssispackages
+    WHERE id IN (SELECT id FROM dbo.sysmaintplan_plans)
+) x
+CROSS APPLY packageXML.nodes('declare namespace DTS="www.microsoft.com/SqlServer/Dts";/DTS:Executable/DTS:ConnectionManagers/DTS:ConnectionManager[@DTS:ObjectName="Local server connection"]') p(cm)
+
+
+UPDATE dbo.sysssispackages SET packagedata = CAST(CAST(REPLACE(CAST(CAST(packagedata AS VARBINARY(MAX)) AS VARCHAR(MAX)), 'WIN-BOAR1D4DTM1', 'SQL01-EMPLEOS') AS XML) AS VARBINARY(MAX))
+WHERE id = '6CE58CE3-03F2-4604-80AC-F42BA0F91101'
