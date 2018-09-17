@@ -1,8 +1,14 @@
-use msdb
+USE [msdb]
+GO
+/****** Object:  StoredProcedure [dbo].[RestoreAutomatico_SP]    Script Date: 8/6/2018 10:13:01 AM ******/
+SET ANSI_NULLS ON
+GO
+SET QUOTED_IDENTIFIER ON
 GO
 ALTER procedure [dbo].[RestoreAutomatico_SP] 
 (@dbname sysname,
 @path_datafile sysname, 
+@path_indexfile sysname,
 @path_logfile sysname,
 @path_backupfull sysname,
 @path_backupdiff sysname,
@@ -57,7 +63,12 @@ END
 
 -- Armo Script de Restore FULL
 SET @sql = 'RESTORE DATABASE ' + @dbname + ' FROM DISK = ''' + @path_backupfull  +  ''' WITH STATS = 10, REPLACE, NORECOVERY, '
-SELECT @sql = CASE TYPE WHEN 'D' THEN @sql + char(13) + ' MOVE ''' + LogicalName + ''' TO ''' + @path_datafile + @dbname + '_' + RIGHT(PhysicalName,CHARINDEX('\',reverse (PhysicalName))-1) + ''','
+SELECT @sql = CASE TYPE WHEN 'D' THEN 
+					CASE
+						WHEN CHARINDEX('index',LogicalName) = 0 
+						THEN @sql + char(13) + ' MOVE ''' + LogicalName + ''' TO ''' + @path_datafile + @dbname + '_' + RIGHT(PhysicalName,CHARINDEX('\',reverse (PhysicalName))-1) + ''','
+						ELSE @sql + char(13) + ' MOVE ''' + LogicalName + ''' TO ''' + @path_indexfile + @dbname + '_' + RIGHT(PhysicalName,CHARINDEX('\',reverse (PhysicalName))-1) + ''','
+					END 
 						WHEN 'L' THEN @sql + char(13) + ' MOVE ''' + LogicalName + ''' TO ''' + @path_logfile + @dbname + '_' + RIGHT(PhysicalName,CHARINDEX('\',reverse (PhysicalName))-1) + ''','
 				END
 FROM #restoretemp
@@ -68,10 +79,17 @@ IF @debug = 1
 	  PRINT @sql
 EXEC(@sql)
 
--- Ejecuta Restore DIFF
-SET @sql = 'RESTORE DATABASE ' + @dbname + ' FROM DISK = ''' + @path_backupdiff  +  ''' WITH STATS = 10, RECOVERY'
+-- Si especifica DIFF arma el SQL para hacer restaurarlo.
+IF @path_backupdiff IS NOT NULL
+BEGIN
+  SET @sql = 'RESTORE DATABASE ' + @dbname + ' FROM DISK = ''' + @path_backupdiff  +  ''' WITH STATS = 10, RECOVERY'  
+END
+ELSE
+BEGIN -- Sino especifica DIFF solo arma el recovery
+  SET @sql = 'RESTORE DATABASE ' + @dbname + ' WITH RECOVERY'  
+END
 IF @debug = 1
-	  PRINT @sql
+	PRINT @sql
 EXEC(@sql)
 
 -- Cambia Owner de la base a SRL
@@ -92,7 +110,7 @@ IF @debug = 1
 	  PRINT @sql
 EXEC(@sql)
 
--- Reduce tamaño del Tlog.
+-- Reduce tamaÃ±o del Tlog.
 SELECT @sql = CASE TYPE WHEN 'L' THEN 'USE ['+@dbname+']; DBCC SHRINKFILE (N'''+LogicalName+''' , 2000)'
 				END
 FROM #restoretemp
@@ -107,6 +125,3 @@ SET @sql = 'USE ['+@dbname+']; CREATE USER ['+@login_owner+'] FOR LOGIN ['+@logi
 IF @debug = 1
 	  PRINT @sql
 EXEC(@sql)
-
-
-
